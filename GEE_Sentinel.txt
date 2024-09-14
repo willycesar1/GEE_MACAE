@@ -1,0 +1,67 @@
+// Definir a área de estudo
+var area = ee.Geometry.Polygon([
+  [[-44.5, -23.5], [-44.5, -23.0], [-44.0, -23.0], [-44.0, -23.5]]
+]);
+
+// Carregar a coleção de imagens do Sentinel-2
+var sentinelCollection = ee.ImageCollection('COPERNICUS/S2')
+  .filterBounds(area)
+  .filterDate('2023-01-01', '2023-12-31')
+  .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 10)) // Limitar a porcentagem de nuvens
+  .median()
+  .clip(area);
+
+// Visualizar a imagem Sentinel-2
+var visualizationParams = {
+  bands: ['B4', 'B3', 'B2'],
+  min: 0,
+  max: 3000,
+};
+Map.centerObject(area, 10);
+Map.addLayer(sentinelCollection, visualizationParams, 'Sentinel-2');
+
+// Definir as amostras de treinamento (pontualmente ou usando polígonos para cada classe)
+var water = /* colocar pontos ou polígonos para a classe 'água' */;
+var urban = /* colocar pontos ou polígonos para a classe 'área urbana' */;
+var vegetation = /* colocar pontos ou polígonos para a classe 'vegetação' */;
+var soil = /* colocar pontos ou polígonos para a classe 'solo exposto' */;
+
+// Combinar todas as classes de treinamento em uma única FeatureCollection
+var trainingSamples = water.merge(urban).merge(vegetation).merge(soil);
+
+// Extrair valores de banda para as amostras de treinamento
+var training = sentinelCollection.sampleRegions({
+  collection: trainingSamples,
+  properties: ['class'], // Definir a propriedade que contém o valor da classe
+  scale: 10
+});
+
+// Treinar um classificador Random Forest
+var classifier = ee.Classifier.smileRandomForest(10).train({
+  features: training,
+  classProperty: 'class',
+  inputProperties: sentinelCollection.bandNames()
+});
+
+// Classificar a imagem
+var classified = sentinelCollection.classify(classifier);
+
+// Definir as cores para visualização das classes
+var palette = [
+  '0000FF', // água
+  'FF0000', // áreas urbanas
+  '00FF00', // vegetação
+  'FFFF00'  // solo exposto
+];
+
+// Adicionar o mapa classificado ao GEE
+Map.addLayer(classified, {min: 0, max: 3, palette: palette}, 'Classificação de Uso do Solo');
+
+// Exportar o mapa classificado para o Google Drive
+Export.image.toDrive({
+  image: classified,
+  description: 'Classificacao_Uso_Solo',
+  scale: 10,
+  region: area,
+  maxPixels: 1e9
+});

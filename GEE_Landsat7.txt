@@ -1,0 +1,117 @@
+// Definir a área de estudo
+var area = ee.Geometry.Polygon([
+  [[-44.5, -23.5], [-44.5, -23.0], [-44.0, -23.0], [-44.0, -23.5]]
+]);
+
+// Função para aplicar máscara de qualidade nas imagens Landsat 7 (Remover nuvens e sombras)
+function maskLandsat7(image) {
+  var cloudShadowBitMask = (1 << 3); // Sombra de nuvem
+  var cloudsBitMask = (1 << 5);      // Nuvens
+
+  var qa = image.select('pixel_qa');
+  
+  // Bits que indicam sombras e nuvens
+  var mask = qa.bitwiseAnd(cloudShadowBitMask).eq(0)
+              .and(qa.bitwiseAnd(cloudsBitMask).eq(0));
+
+  return image.updateMask(mask);
+}
+
+// Função para carregar e processar imagens do Landsat 7 de um determinado ano
+function getLandsat7Image(year) {
+  var startDate = ee.Date.fromYMD(year, 1, 1);
+  var endDate = ee.Date.fromYMD(year, 1, 31);
+  
+  var landsatCollection = ee.ImageCollection('LANDSAT/LE07/C01/T1_SR')
+    .filterBounds(area)
+    .filterDate(startDate, endDate)
+    .filter(ee.Filter.lt('CLOUD_COVER', 5)) // Limitar a porcentagem de nuvens a menos de 5%
+    .map(maskLandsat7) // Aplicar a máscara de nuvens e sombras
+    .median()
+    .clip(area);
+  
+  return landsatCollection;
+}
+
+// Carregar imagens dos anos 2001, 2011 e 2021
+var landsat2001 = getLandsat7Image(2001);
+var landsat2011 = getLandsat7Image(2011);
+var landsat2021 = getLandsat7Image(2021);
+
+// Visualizar as imagens Landsat 7 para os três períodos
+var visualizationParams = {
+  bands: ['B3', 'B2', 'B1'], // RGB natural para Landsat 7 (Banda 3 = Vermelho, 2 = Verde, 1 = Azul)
+  min: 0,
+  max: 3000,
+};
+
+Map.centerObject(area, 10);
+Map.addLayer(landsat2001, visualizationParams, 'Landsat 7 - 2001');
+Map.addLayer(landsat2011, visualizationParams, 'Landsat 7 - 2011');
+Map.addLayer(landsat2021, visualizationParams, 'Landsat 7 - 2021');
+
+// Definir as amostras de treinamento (pontualmente ou usando polígonos para cada classe)
+var water = /* colocar pontos ou polígonos para a classe 'água' */;
+var urban = /* colocar pontos ou polígonos para a classe 'área urbana' */;
+var vegetation = /* colocar pontos ou polígonos para a classe 'vegetação' */;
+var soil = /* colocar pontos ou polígonos para a classe 'solo exposto' */;
+
+// Combinar todas as classes de treinamento em uma única FeatureCollection
+var trainingSamples = water.merge(urban).merge(vegetation).merge(soil);
+
+// Extrair valores de banda para as amostras de treinamento
+var training = landsat2001.sampleRegions({
+  collection: trainingSamples,
+  properties: ['class'], // Definir a propriedade que contém o valor da classe
+  scale: 30
+});
+
+// Treinar um classificador Random Forest
+var classifier = ee.Classifier.smileRandomForest(10).train({
+  features: training,
+  classProperty: 'class',
+  inputProperties: landsat2001.bandNames()
+});
+
+// Classificar as imagens para 2001, 2011 e 2021
+var classified2001 = landsat2001.classify(classifier);
+var classified2011 = landsat2011.classify(classifier);
+var classified2021 = landsat2021.classify(classifier);
+
+// Definir as cores para visualização das classes
+var palette = [
+  '0000FF', // água
+  'FF0000', // áreas urbanas
+  '00FF00', // vegetação
+  'FFFF00'  // solo exposto
+];
+
+// Adicionar os mapas classificados ao GEE
+Map.addLayer(classified2001, {min: 0, max: 3, palette: palette}, 'Classificação de Uso do Solo - 2001');
+Map.addLayer(classified2011, {min: 0, max: 3, palette: palette}, 'Classificação de Uso do Solo - 2011');
+Map.addLayer(classified2021, {min: 0, max: 3, palette: palette}, 'Classificação de Uso do Solo - 2021');
+
+// Exportar os mapas classificados para o Google Drive
+Export.image.toDrive({
+  image: classified2001,
+  description: 'Classificacao_Uso_Solo_2001_Landsat7',
+  scale: 30,
+  region: area,
+  maxPixels: 1e9
+});
+
+Export.image.toDrive({
+  image: classified2011,
+  description: 'Classificacao_Uso_Solo_2011_Landsat7',
+  scale: 30,
+  region: area,
+  maxPixels: 1e9
+});
+
+Export.image.toDrive({
+  image: classified2021,
+  description: 'Classificacao_Uso_Solo_2021_Landsat7',
+  scale: 30,
+  region: area,
+  maxPixels: 1e9
+});
